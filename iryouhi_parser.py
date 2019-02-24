@@ -1,5 +1,5 @@
 #*********************************************
-# S社　健康保険医療費 集計プログラム Ver.1.03
+# S社　健康保険医療費 集計プログラム Ver.1.04
 #*********************************************
 
 # ≪開発者≫ +++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -149,21 +149,34 @@ def print_and_write(txt):
     output_txt.write(txt)
     output_txt.write('\n')
 
-def include(ky, lis):
+def include_(ky, lis):
     for l in lis:
         if ky in l:
             return True
     return False
 
-def parse_pdf(file, total_):
+def sort_by_x(a_x_list):
+    sorter = []
+    for a_x in a_x_list:
+        #print(a_x)
+        content, xs = a_x.split('x')
+        sorter.append([content, int(xs)])
+    sorter.sort(key=lambda x:x[1])
+    out = list(map(lambda x:x[0], sorter))
+    return out
+
+def strip_x(a_x):
+    content, xs = a_x.split('x')
+    return content
+
+def parse_pdf(file, total_, page_num_):
     with open(file, 'rb') as f:
         # PDFPage.get_pages()にファイルオブジェクトを指定して、PDFPageオブジェクトを順に取得する。
         # 時間がかかるファイルは、キーワード引数pagenosで処理するページ番号（0始まり）のリストを指定するとよい。
-        page_num = 0
         for page in PDFPage.get_pages(f):
-            page_num += 1
+            page_num_ += 1
             if vorbose:
-                print_and_write('\n====== ページ {0} ======\n'.format(page_num))
+                print_and_write('\n====== ページ {0} ======\n'.format(page_num_))
             interpreter.process_page(page)  # ページを処理する。
             layout = device.get_result()  # LTPageオブジェクトを取得。
 
@@ -176,22 +189,22 @@ def parse_pdf(file, total_):
 
             for box in boxes:
                 vkey = int(round((box.y1)/38,0))
-                pvkey = page_num * 100 + vkey
+                pvkey = page_num_ * 100 + vkey
                 hkey = int(box.x0) # 153 --> 141
-                content = box.get_text().strip().replace('\n','')  # テキストボックス内のテキストを表示する。
+                content = box.get_text().strip().replace('\n','')+"x"+str(hkey)  # テキストボックス内のテキストを表示する。
                 if vorbose:
                     print_and_write(content + "({0},{1}):{2}".format(round(box.y1,0), round(box.x0,0), vkey))
                 if 4 <= vkey <= 13:
                     if not (pvkey in dic):
                         dic[pvkey] = []
-                    if 1 <= len(content) < 64 and not include("計", dic[pvkey]):
-                        if 153 == hkey and 3 == len(dic[pvkey]):
-                            dic[pvkey][2] += content # 病院名が２行に分かれている場合
+                    if 1 <= len(content) < 64 and not include_("計", dic[pvkey]):
+                        if 153 == hkey and 3 <= len(dic[pvkey]):
+                            le = len(dic[pvkey])
+                            dic[pvkey][le-1] = strip_x(dic[pvkey][le-1]) + content # 病院名が２行に分かれている場合
                         else:
                             dic[pvkey].append(content)
-                            if 10 == len(dic[pvkey]):
-                                total_ += int(dic[pvkey][9].replace(',',''))
-    return total_
+
+    return [total_, page_num_]
 
 dir = sys.argv[1]
 pw = sys.argv[2]
@@ -204,6 +217,7 @@ def fmt_rec(ar):
 
 class Meisai:
     def __init__(self, one):
+        #print_and_write(':'.join(one))
         self.patient = one[0].replace("　","")
         self.month   = one[1]
         self.days, self.hospital = one[2].split()
@@ -231,33 +245,34 @@ c = 0
 total = 0
 rows = 0
 meisais = []
+dic = {}
+
+page_number = 0
 for i, f in enumerate(files):
     if os.path.exists(wk_pdf):
         os.remove(wk_pdf)
-    dic = {}
+    #dic = {}
     print('----------------\nfile {0} {1}'.format(i,f))
     cmd = "{0} --decrypt {1} --password={2} {3}".format(qpdf_path, dir + '/' + f, pw, wk_pdf)
     print(cmd)
     returncode = subprocess.call(cmd)
-    total = parse_pdf(wk_pdf, total)
+    total, page_number = parse_pdf(wk_pdf, total, page_number)
     print()
     c = i
 
-    for d in dic:
-        if not include('計', dic[d]) and 10 == len(dic[d]):
+    for d in dic:    # key in dictionary
+        dic[d] = sort_by_x(dic[d])
+
+        if not include_('計', dic[d]) and 10 == len(dic[d]):
             print_and_write("({0}){1}".format(d, fmt_rec(dic[d])))
             meisais.append(Meisai(dic[d]))
             rows += 1
-            #print(inspect.getmembers(meisai))
+            total += int(dic[d][9].replace(',',''))
 
 print('\nParsed {0} files. Total={1}'.format(c + 1, total))
 
 wb = openpyxl.load_workbook('医療費集計テンプレート.xlsx')
 sheet = wb['Sheet1']
-
-#wb = openpyxl.load_workbook('iryouhi_form_v3_resave.xlsx')
-#wb = openpyxl.load_workbook('iryouhi_form_v3_sanitized.xlsx')
-#sheet = wb['医療費集計フォーム']
 
 for i, meisai in enumerate(meisais):
     meisai.put_sheet(sheet, i+1)
